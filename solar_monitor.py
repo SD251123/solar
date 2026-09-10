@@ -41,7 +41,10 @@ def monitor_solar_status(user_id, user_pw):
     current_hour = now_kst.hour
     current_time_str = now_kst.strftime('%Y-%m-%d %H:%M:%S')
 
-    # 🚀 [추가됨] 봇 가동 시작 알림 (작동 여부 즉시 확인용)
+    # 1. 봇 가동 시작 최초 알림 (요청하신 대로 최초 시작 시점에는 안내 메시지 전송)
+    for _ in tqdm(range(3), desc="봇 초기화 및 텔레그램 연결 중"):
+        time.sleep(0.3)
+
     start_msg = (
         "🤖 *[태양광 봇 가동 시작]*\n\n"
         "• 상태: 깃허브 서버에서 모니터링을 시작합니다!\n"
@@ -62,7 +65,7 @@ def monitor_solar_status(user_id, user_pw):
         driver.get("https://solar.mrt.co.kr/")
         wait = WebDriverWait(driver, 15)
         
-        # 1. 로그인
+        # 2. 로그인
         print("🔑 로그인을 진행하고 있습니다...")
         id_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='text'], input[placeholder*='아이디']")))
         id_input.clear()
@@ -75,14 +78,13 @@ def monitor_solar_status(user_id, user_pw):
         driver.find_element(By.CSS_SELECTOR, "button[type='submit'], .login-btn, button").click()
         
         print("⏳ 대시보드 데이터 로딩 대기 중...")
-        # TQBM 바(tqdm)를 활용해 로딩 과정을 시각적으로 확인
         for _ in tqdm(range(6), desc="데이터 렌더링 대기 중"):
             time.sleep(1)
         
         total_issues = 0
         detected_source = ""
         
-        # 2-1. '경보' 뱃지 체크
+        # 3-1. '경보' 뱃지 체크
         for _ in tqdm(range(1), desc="경보 데이터 확인"):
             try:
                 alarm_badge = driver.find_element(By.CSS_SELECTOR, "span.Header__alarm-count___13qAd")
@@ -95,7 +97,7 @@ def monitor_solar_status(user_id, user_pw):
             except Exception:
                 pass 
 
-        # 2-2. '오류' 뱃지 체크
+        # 3-2. '오류' 뱃지 체크
         for _ in tqdm(range(1), desc="오류 데이터 확인"):
             try:
                 error_div = driver.find_element(By.CSS_SELECTOR, "div.warning span")
@@ -116,9 +118,10 @@ def monitor_solar_status(user_id, user_pw):
 
         print(f"🔍 실시간 통합 진단 결과 -> 총 감지된 이상 징후: {total_issues}건 ({detected_source})")
 
-        # 3. 알림 전송 로직 분기
+        # 4. 알림 전송 종합 로직 (이상 징후 발생 시 우선 경고, 정기 리포트 시간인 경우 정상 가동 알림 추가 발송)
+        
+        # 4-1. 이상이 감지된 경우 즉시 긴급 경고 발송
         if total_issues > 0:
-            # 이상이 감지된 경우: 즉시 긴급 경고 알림 전송
             alert_msg = (
                 "🚨 *[태양광 발전소 긴급 이상 경고]*\n\n"
                 f"• 감지 상태: *{detected_source.strip()}* 발생!\n"
@@ -127,19 +130,20 @@ def monitor_solar_status(user_id, user_pw):
             )
             send_telegram_message(alert_msg)
             print("🚨 문제가 감지되어 텔레그램으로 즉시 긴급 알림을 전송했습니다.")
-        else:
-            # 이상이 없는 경우: 정오(12시), 오후 3시(15시), 오후 6시(18시) 정각에만 정상 가동 리포트 전송
-            if current_hour in [12, 15, 18]:
-                heartbeat_msg = (
-                    "🟢 *[태양광 봇 정기 가동 리포트]*\n\n"
-                    "• 상태: 정상 가동 중 🛡️\n"
-                    "• 모든 발전소에 이상 징후가 없습니다.\n\n"
-                    f"• 확인 시간: {current_time_str}"
-                )
-                send_telegram_message(heartbeat_msg)
-                print(f"🟢 정기 리포트 시간({current_hour}시) 도래: 텔레그램으로 정상 가동 메시지를 전송했습니다.")
-            else:
-                print("🟢 이상 없음 및 정기 리포트 시간이 아님. 텔레그램 알림을 생략합니다.")
+        
+        # 4-2. 정해진 정기 리포트 시간(12시, 15시, 18시)인 경우 정상 가동 리포트 발송
+        if current_hour in [12, 15, 18]:
+            heartbeat_msg = (
+                "🟢 *[태양광 봇 정기 가동 리포트]*\n\n"
+                "• 상태: 정상 가동 중 🛡️\n"
+                "• 현재 시간대 순찰 점검이 완료되었습니다.\n\n"
+                f"• 확인 시간: {current_time_str}"
+            )
+            send_telegram_message(heartbeat_msg)
+            print(f"🟢 정기 리포트 시간({current_hour}시) 도래: 텔레그램으로 정상 가동 메시지를 전송했습니다.")
+        
+        if total_issues == 0 and current_hour not in [12, 15, 18]:
+            print("🟢 이상 없음 및 정기 리포트 시간이 아님. 추가 알림은 생략합니다.")
 
     except Exception as e:
         error_msg = f"❌ *[모니터링 스크립트 실행 오류]*\n`{str(e)}`"
@@ -147,6 +151,8 @@ def monitor_solar_status(user_id, user_pw):
         print(error_msg)
     
     finally:
+        for _ in tqdm(range(2), desc="브라우저 세션 정리 중"):
+            time.sleep(0.5)
         driver.quit()
         print("🔒 깃허브 서버 세션이 안전하게 종료되었습니다.")
 
