@@ -35,6 +35,20 @@ def send_telegram_message(message):
 def monitor_solar_status(user_id, user_pw):
     print("🚀 깃허브 서버 환경(헤드리스)에서 태양광 발전소 모니터링 시스템 가동 중...")
     
+    # 한국 시간(KST, UTC+9) 계산
+    kst = timezone(timedelta(hours=9))
+    now_kst = datetime.now(kst)
+    current_hour = now_kst.hour
+    current_time_str = now_kst.strftime('%Y-%m-%d %H:%M:%S')
+
+    # 🚀 [추가됨] 봇 가동 시작 알림 (작동 여부 즉시 확인용)
+    start_msg = (
+        "🤖 *[태양광 봇 가동 시작]*\n\n"
+        "• 상태: 깃허브 서버에서 모니터링을 시작합니다!\n"
+        f"• 시작 시간: {current_time_str}"
+    )
+    send_telegram_message(start_msg)
+    
     options = webdriver.ChromeOptions()
     # 서버 환경 구동을 위한 필수 헤드리스 및 보안 옵션 적용
     options.add_argument("--headless")
@@ -101,12 +115,6 @@ def monitor_solar_status(user_id, user_pw):
                 pass 
 
         print(f"🔍 실시간 통합 진단 결과 -> 총 감지된 이상 징후: {total_issues}건 ({detected_source})")
-
-        # 한국 시간(KST, UTC+9) 계산
-        kst = timezone(timedelta(hours=9))
-        now_kst = datetime.now(kst)
-        current_hour = now_kst.hour
-        current_time_str = now_kst.strftime('%Y-%m-%d %H:%M:%S')
 
         # 3. 알림 전송 로직 분기
         if total_issues > 0:
