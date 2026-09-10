@@ -31,4 +31,4 @@ jobs:
           SOLAR_ID: ${{ secrets.SOLAR_ID }}
           SOLAR_PW: ${{ secrets.SOLAR_PW }}
         run: |
-          python your_script_name.py
+          python solar_monitor.py
