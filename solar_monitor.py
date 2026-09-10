@@ -39,6 +39,7 @@ def monitor_solar_status(user_id, user_pw):
     kst = timezone(timedelta(hours=9))
     now_kst = datetime.now(kst)
     current_hour = now_kst.hour
+    current_minute = now_kst.minute
     current_time_str = now_kst.strftime('%Y-%m-%d %H:%M:%S')
 
     options = webdriver.ChromeOptions()
@@ -110,7 +111,8 @@ def monitor_solar_status(user_id, user_pw):
 
         print(f"🔍 실시간 통합 진단 결과 -> 총 감지된 이상 징후: {total_issues}건 ({detected_source})")
 
-        # 3. 알림 전송 종합 로직 (시작 알림 제거 버전)
+        # 3. 알림 전송 종합 로직
+        # 3-1. 이상이 감지된 경우 즉시 긴급 경고 발송
         if total_issues > 0:
             alert_msg = (
                 "🚨 *[태양광 발전소 긴급 이상 경고]*\n\n"
@@ -121,7 +123,8 @@ def monitor_solar_status(user_id, user_pw):
             send_telegram_message(alert_msg)
             print("🚨 문제가 감지되어 텔레그램으로 즉시 긴급 알림을 전송했습니다.")
         
-        if current_hour in [12, 15, 18]:
+        # 3-2. 정기 리포트 시간(12시, 15시, 18시)이면서, 정각 크론 타임(예: 30분 미만에 실행된 경우)에만 정상 가동 리포트 발송
+        if current_hour in [12, 15, 18] and current_minute < 30:
             heartbeat_msg = (
                 "🟢 *[태양광 봇 정기 가동 리포트]*\n\n"
                 "• 상태: 정상 가동 중 🛡️\n"
@@ -129,10 +132,12 @@ def monitor_solar_status(user_id, user_pw):
                 f"• 확인 시간: {current_time_str}"
             )
             send_telegram_message(heartbeat_msg)
-            print(f"🟢 정기 리포트 시간({current_hour}시) 도래: 텔레그램으로 정상 가동 메시지를 전송했습니다.")
+            print(f"🟢 정기 리포트 시간대({current_hour}시 정각 턴) 도래: 텔레그램으로 정상 가동 메시지를 전송했습니다.")
+        else:
+            print("🟢 정기 리포트 조건에 해당하지 않음 (30분 단위 순찰 또는 시간대 불일치).")
         
-        if total_issues == 0 and current_hour not in [12, 15, 18]:
-            print("🟢 이상 없음 및 정기 리포트 시간이 아님. 추가 알림은 생략합니다.")
+        if total_issues == 0 and not (current_hour in [12, 15, 18] and current_minute < 30):
+            print("🟢 이상 없음. 추가 알림은 생략합니다.")
 
     except Exception as e:
         error_msg = f"❌ *[모니터링 스크립트 실행 오류]*\n`{str(e)}`"
