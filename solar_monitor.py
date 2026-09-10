@@ -33,7 +33,7 @@ def send_telegram_message(message):
         print(f"❌ 텔레그램 API 통신 에러: {e}")
 
 def monitor_solar_status(user_id, user_pw):
-    print("🚀 깃허브 서버 환경(헤드리스)에서 태양광 발전소 모니터링 시스템 가동 중...")
+    print("🚀 깃허브 서버 환경(헤드리스)에서 태양광 발전소 순찰 모니터링 중...")
     
     # 한국 시간(KST, UTC+9) 계산
     kst = timezone(timedelta(hours=9))
@@ -41,17 +41,6 @@ def monitor_solar_status(user_id, user_pw):
     current_hour = now_kst.hour
     current_time_str = now_kst.strftime('%Y-%m-%d %H:%M:%S')
 
-    # 1. 봇 가동 시작 최초 알림 (요청하신 대로 최초 시작 시점에는 안내 메시지 전송)
-    for _ in tqdm(range(3), desc="봇 초기화 및 텔레그램 연결 중"):
-        time.sleep(0.3)
-
-    start_msg = (
-        "🤖 *[태양광 봇 가동 시작]*\n\n"
-        "• 상태: 깃허브 서버에서 모니터링을 시작합니다!\n"
-        f"• 시작 시간: {current_time_str}"
-    )
-    send_telegram_message(start_msg)
-    
     options = webdriver.ChromeOptions()
     # 서버 환경 구동을 위한 필수 헤드리스 및 보안 옵션 적용
     options.add_argument("--headless")
@@ -65,8 +54,11 @@ def monitor_solar_status(user_id, user_pw):
         driver.get("https://solar.mrt.co.kr/")
         wait = WebDriverWait(driver, 15)
         
-        # 2. 로그인
+        # 1. 로그인
         print("🔑 로그인을 진행하고 있습니다...")
+        for _ in tqdm(range(2), desc="로그인 준비 중"):
+            time.sleep(0.3)
+            
         id_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='text'], input[placeholder*='아이디']")))
         id_input.clear()
         id_input.send_keys(user_id)
@@ -84,7 +76,7 @@ def monitor_solar_status(user_id, user_pw):
         total_issues = 0
         detected_source = ""
         
-        # 3-1. '경보' 뱃지 체크
+        # 2-1. '경보' 뱃지 체크
         for _ in tqdm(range(1), desc="경보 데이터 확인"):
             try:
                 alarm_badge = driver.find_element(By.CSS_SELECTOR, "span.Header__alarm-count___13qAd")
@@ -97,7 +89,7 @@ def monitor_solar_status(user_id, user_pw):
             except Exception:
                 pass 
 
-        # 3-2. '오류' 뱃지 체크
+        # 2-2. '오류' 뱃지 체크
         for _ in tqdm(range(1), desc="오류 데이터 확인"):
             try:
                 error_div = driver.find_element(By.CSS_SELECTOR, "div.warning span")
@@ -118,9 +110,7 @@ def monitor_solar_status(user_id, user_pw):
 
         print(f"🔍 실시간 통합 진단 결과 -> 총 감지된 이상 징후: {total_issues}건 ({detected_source})")
 
-        # 4. 알림 전송 종합 로직 (이상 징후 발생 시 우선 경고, 정기 리포트 시간인 경우 정상 가동 알림 추가 발송)
-        
-        # 4-1. 이상이 감지된 경우 즉시 긴급 경고 발송
+        # 3. 알림 전송 종합 로직 (시작 알림 제거 버전)
         if total_issues > 0:
             alert_msg = (
                 "🚨 *[태양광 발전소 긴급 이상 경고]*\n\n"
@@ -131,7 +121,6 @@ def monitor_solar_status(user_id, user_pw):
             send_telegram_message(alert_msg)
             print("🚨 문제가 감지되어 텔레그램으로 즉시 긴급 알림을 전송했습니다.")
         
-        # 4-2. 정해진 정기 리포트 시간(12시, 15시, 18시)인 경우 정상 가동 리포트 발송
         if current_hour in [12, 15, 18]:
             heartbeat_msg = (
                 "🟢 *[태양광 봇 정기 가동 리포트]*\n\n"
