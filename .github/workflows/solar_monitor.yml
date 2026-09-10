@@ -1,0 +1,37 @@
+name: Solar Monitor Bot
+
+on:
+  schedule:
+    # 매일 오전 6시부터 오후 8시(20시)까지 30분 간격으로 실행 (UTC 기준 시간 변환 적용)
+    # KST(한국 시간) 오전 6시 ~ 오후 8시는 UTC 기준으로 전날 21시 ~ 당일 11시 입니다.
+    # cron 구문: '30/30 21-11 * * *' 또는 30분 단위 매시 정각 및 30분
+    - cron: '0,30 21-11 * * *'
+  
+  # 수동으로도 테스트 실행할 수 있게 버튼을 만들어 둠
+  workflow_dispatch:
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 깃허브 저장소 코드 내려받기
+        uses: actions/checkout@v4
+
+      - name: 🐍 파이썬 환경 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 📦 필수 라이브러리 설치 (requirements.txt)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🚀 태양광 모니터링 스크립트 실행
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SOLAR_ID: ${{ secrets.SOLAR_ID }}
+          SOLAR_PW: ${{ secrets.SOLAR_PW }}
+        run: |
+          python solar_monitor.py
