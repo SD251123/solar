@@ -199,26 +199,53 @@ def monitor_solar_status(user_id, user_pw):
 
                 total_current_power += p_power
 
-                # 3) 금일 발전시간 (h) 파싱 (개선된 형제/인접 태그 탐색 로직)
+                # 3) 금일 발전시간 (h) 파싱 (깃허브 환경 최적화 강력 탐색 로직)
                 p_hours = 0.0
                 if plant_card:
                     try:
-                        # '금일 발전시간' 텍스트를 가진 div 바로 뒤나 인접한 span 값을 정확히 타겟팅
-                        time_elem = plant_card.find_element(
-                            By.XPATH, ".//*[contains(text(), '금일 발전시간')]/following-sibling::span[1]"
+                        # '금일 발전시간' 문구를 포함하는 모든 요소를 찾음
+                        time_labels = plant_card.find_elements(
+                            By.XPATH, ".//*[contains(text(), '금일 발전시간')]"
                         )
-                        raw_hours = time_elem.text.replace(",", "").replace("h", "").strip()
-                        p_hours = float(raw_hours)
+                        for tlbl in time_labels:
+                            try:
+                                # 부모 또는 조상 컨테이너로 접근하여 내부의 모든 span 확인
+                                container = tlbl.find_element(By.XPATH, "./parent::*")
+                                spans = container.find_elements(By.TAG_NAME, "span")
+                                if not spans:
+                                    container = tlbl.find_element(By.XPATH, "./ancestor::div[2]")
+                                    spans = container.find_elements(By.TAG_NAME, "span")
+
+                                for sp in spans:
+                                    sp_text = sp.text.replace(",", "").replace("h", "").strip()
+                                    if sp_text and "금일" not in sp_text and "발전시간" not in sp_text:
+                                        try:
+                                            val_float = float(sp_text)
+                                            # 발전시간은 하루 최대 24시간을 넘지 않으므로 0~24 범위 검증
+                                            if 0.0 <= val_float <= 24.0:
+                                                p_hours = val_float
+                                                break
+                                        except ValueError:
+                                            continue
+                                if p_hours > 0.0:
+                                    break
+                            except Exception:
+                                continue
+
+                        # 위 방법으로 못 찾았을 경우 카드 내 전체 span에서 유효한 시간 형태(0~24 사이 실수) 탐색
+                        if p_hours == 0.0:
+                            all_spans = plant_card.find_elements(By.TAG_NAME, "span")
+                            for sp in all_spans:
+                                sp_text = sp.text.replace(",", "").replace("h", "").strip()
+                                try:
+                                    val_float = float(sp_text)
+                                    if 0.0 <= val_float <= 24.0 and val_float != p_capacity and val_float != p_power:
+                                        p_hours = val_float
+                                        break
+                                except ValueError:
+                                    continue
                     except Exception:
-                        try:
-                            # 만약 구조상 상위 공용 부모 안에 있다면 우회 탐색
-                            fallback_elem = driver.find_element(
-                                By.XPATH, f"(//*[contains(text(), '금일 발전시간')]/following-sibling::span[1])[{i+1}]"
-                            )
-                            raw_hours = fallback_elem.text.replace(",", "").replace("h", "").strip()
-                            p_hours = float(raw_hours)
-                        except Exception:
-                            p_hours = 0.0
+                        p_hours = 0.0
 
                 # 4) 예상 금일 발전량 및 매출 계산
                 p_generation = p_capacity * p_hours
