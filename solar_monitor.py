@@ -93,8 +93,9 @@ def monitor_solar_status(user_id, user_pw):
             By.CSS_SELECTOR, "button[type='submit'], .login-btn, button"
         ).click()
 
-        print("⏳ 대시보드 데이터 로딩 대기 중...")
-        for _ in tqdm(range(6), desc="데이터 렌더링 대기 중"):
+        # 깃허브 서버의 느린 비동기 렌더링을 고려하여 대기 시간을 9초로 넉넉하게 상향
+        print("⏳ 대시보드 데이터 로딩 대기 중 (헤드리스 최적화)...")
+        for _ in tqdm(range(9), desc="데이터 렌더링 대기 중"):
             time.sleep(1)
 
         total_issues = 0
@@ -141,17 +142,12 @@ def monitor_solar_status(user_id, user_pw):
             plant_name_elements = driver.find_elements(By.CSS_SELECTOR, "div.plant-name")
             capacity_elements = driver.find_elements(By.CSS_SELECTOR, "span.capa")
             
-            # 페이지 전체에서 '금일 발전시간' 라벨 엘리먼트들을 순서대로 일괄 수집
-            time_label_elements = driver.find_elements(
-                By.XPATH, "//*[contains(text(), '금일 발전시간')]"
-            )
-
             print(f"📊 화면에서 감지된 발전소 수: {len(plant_name_elements)}개소")
 
             for i in range(len(plant_name_elements)):
                 p_name = plant_name_elements[i].text.strip()
 
-                # 개별 발전소 카드 영역 특정 (상위 부모 컨테이너)
+                # 개별 발전소 카드 영역 특정
                 plant_card = None
                 try:
                     plant_card = plant_name_elements[i].find_element(
@@ -172,51 +168,52 @@ def monitor_solar_status(user_id, user_pw):
                     except Exception:
                         p_capacity = 0.0
 
-                # 2) 현재 발전량 (kW) 파싱
+                # 2) 현재 발전량 (kW) 파싱 (값이 뜰 때까지 최대 3번 재시도)
                 p_power = 0.0
-                if plant_card:
+                for _ in range(3):
                     try:
-                        power_elem = plant_card.find_element(
-                            By.CSS_SELECTOR, "div.now-power, div.MediumGridBox__list-label-val___3n6GW.now-power"
-                        )
-                        raw_power = (
-                            power_elem.text.lower()
-                            .replace("kw", "")
-                            .replace("kwh", "")
-                            .replace(",", "")
-                            .strip()
-                        )
-                        p_power = float(raw_power)
-                    except Exception:
-                        try:
-                            all_powers = driver.find_elements(By.CSS_SELECTOR, "div.now-power")
-                            if i < len(all_powers):
-                                raw_power = (
-                                    all_powers[i].text.lower()
-                                    .replace("kw", "")
-                                    .replace("kwh", "")
-                                    .replace(",", "")
-                                    .strip()
-                                )
+                        if plant_card:
+                            power_elem = plant_card.find_element(
+                                By.CSS_SELECTOR, "div.now-power, div.MediumGridBox__list-label-val___3n6GW.now-power"
+                            )
+                            raw_power = (
+                                power_elem.text.lower()
+                                .replace("kw", "")
+                                .replace("kwh", "")
+                                .replace(",", "")
+                                .strip()
+                            )
+                            if raw_power:
                                 p_power = float(raw_power)
-                        except Exception:
-                            p_power = 0.0
+                                if p_power > 0.0:
+                                    break
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
 
                 total_current_power += p_power
 
-                # 3) 금일 발전시간 (h) 파싱 (인덱스 기반 형제 span 직접 타겟팅)
+                # 3) 금일 발전시간 (h) 파싱 (비동기 렌더링 지연 대응: 값이 채워질 때까지 최대 3번 재시도)
                 p_hours = 0.0
-                try:
-                    if i < len(time_label_elements):
-                        # '금일 발전시간' <div> 바로 다음 형제인 <span> 값 가져오기
-                        time_val_elem = time_label_elements[i].find_element(
-                            By.XPATH, "./following-sibling::span[1]"
+                for _ in range(3):
+                    try:
+                        # 매번 최신 라벨 엘리먼트를 가져와서 형제 span 탐색
+                        time_label_elements = driver.find_elements(
+                            By.XPATH, "//*[contains(text(), '금일 발전시간')]"
                         )
-                        raw_hours = time_val_elem.text.replace(",", "").replace("h", "").strip()
-                        p_hours = float(raw_hours)
-                except Exception as ex:
-                    print(f"⚠️ [{p_name}] 발전시간 파싱 중 예외: {ex}")
-                    p_hours = 0.0
+                        if i < len(time_label_elements):
+                            time_val_elem = time_label_elements[i].find_element(
+                                By.XPATH, "./following-sibling::span[1]"
+                            )
+                            raw_hours = time_val_elem.text.replace(",", "").replace("h", "").strip()
+                            if raw_hours:
+                                val_f = float(raw_hours)
+                                if val_f > 0.0:
+                                    p_hours = val_f
+                                    break
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
 
                 # 4) 예상 금일 발전량 및 매출 계산
                 p_generation = p_capacity * p_hours
