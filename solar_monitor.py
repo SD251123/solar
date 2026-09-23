@@ -135,6 +135,7 @@ def monitor_solar_status(user_id, user_pw):
         plants_summary = []
         total_current_power = 0.0
         total_estimated_revenue = 0.0
+        total_estimated_generation = 0.0
 
         try:
             plant_name_elements = driver.find_elements(By.CSS_SELECTOR, "div.plant-name")
@@ -222,42 +223,42 @@ def monitor_solar_status(user_id, user_pw):
                     p_hours = 0.0
 
                 # 4) 예상 금일 발전량 및 매출 계산 (용량 × 발전시간 = 누적 발전량 kWh)
-                estimated_generation = p_capacity * p_hours
-                estimated_revenue = estimated_generation * UNIT_PRICE
-                total_estimated_revenue += estimated_revenue
+                p_generation = p_capacity * p_hours
+                p_revenue = p_generation * UNIT_PRICE
+                
+                total_estimated_generation += p_generation
+                total_estimated_revenue += p_revenue
 
                 plants_summary.append({
                     "name": p_name,
                     "power": p_power,
                     "capacity": p_capacity,
                     "hours": p_hours,
-                    "revenue": estimated_revenue,
+                    "generation": p_generation,
+                    "revenue": p_revenue,
                 })
 
         except Exception as e:
             print(f"⚠️ 다중 발전소 크롤링 중 예외 발생: {e}")
         # ======================================================================
 
-        # ==================== [8. 다온에너지 계산 로직 추가] ====================
-        # 석계2, 매곡4 발전소 데이터 추출 후 합산
-        daon_capacity = 0.0
-        daon_power = 0.0
-        daon_revenue = 0.0
+        # ==================== [사업자별 집계 로직] ====================
+        # 1. 한빛산업 (한빛에너지 태양광발전소)
+        hanbit_capacity = 0.0
+        hanbit_generation = 0.0
+        hanbit_revenue = 0.0
 
         for p in plants_summary:
-            # 석계2 또는 매곡4 포함 여부 확인 (이름 매칭)
-            if "석계1,2" in p["name"] or "매곡1,2,3,4" in p["name"]:
-                # 석계1,2 전체 용량 중 석계2 비율 대략 반영 또는 유저 요청 명시값 적용
-                # 사용자 요청: 석계2(89.66kW), 매곡4(174.15kW) 고정 용량 합산
-                pass
+            if "한빛" in p["name"]:
+                hanbit_capacity += p["capacity"]
+                hanbit_generation += p["generation"]
+                hanbit_revenue += p["revenue"]
 
-        # 정확한 유저 지정 기준용량 반영을 위해 이름 검색으로 개별 값 산출 대신 직접 매칭 조회
+        # 2. 다온에너지 (석계2 + 매곡4)
         sge_2_capa = 89.66
         mg_4_capa = 174.15
         daon_total_capa = sge_2_capa + mg_4_capa  # 263.81 kW
 
-        # 크롤링된 발전소 중에서 해당 비율만큼의 실시간 발전량 및 매출 계산
-        # (석계1,2와 매곡 발전소들의 평균 발전시간 효율을 활용하여 합산)
         sge_hours = 0.0
         mg_hours = 0.0
         for p in plants_summary:
@@ -266,29 +267,23 @@ def monitor_solar_status(user_id, user_pw):
             elif "매곡1,2,3,4" in p["name"]:
                 mg_hours = p["hours"]
 
-        # 각각의 당일 예상 발전량(용량 * 발전시간) 합산
-        daon_estimated_generation = (sge_2_capa * sge_hours) + (mg_4_capa * mg_hours)
-        daon_revenue = daon_estimated_generation * UNIT_PRICE
+        daon_generation = (sge_2_capa * sge_hours) + (mg_4_capa * mg_hours)
+        daon_revenue = daon_generation * UNIT_PRICE
 
-        # 다온에너지 현재 발전량 합산 (비율 배분 혹은 대표값 대입 - 여기서는 단순 합산 추정)
-        sge_power = 0.0
-        mg_power = 0.0
-        for p in plants_summary:
-            if "석계1,2" in p["name"]:
-                # 석계1,2 전체 현재 발전량에서 석계2 비중(89.66 / 161.92) 만큼 적용
-                sge_power = p["power"] * (89.66 / max(p["capacity"], 1))
-            elif "매곡1,2,3,4" in p["name"]:
-                # 매곡전체 현재 발전량에서 매곡4 비중(174.15 / 351.98) 만큼 적용
-                mg_power = p["power"] * (174.15 / max(p["capacity"], 1))
-        daon_power = sge_power + mg_power
-        # ======================================================================
+        # 3. 한영앤코 (나머지 모두 = 전체 1~7번 총합에서 한빛산업과 다온에너지 제외)
+        total_1_to_7_capacity = sum(p["capacity"] for p in plants_summary)
+        
+        hanyoung_capacity = total_1_to_7_capacity - hanbit_capacity
+        hanyoung_generation = total_estimated_generation - hanbit_generation - daon_generation
+        hanyoung_revenue = hanyoung_generation * UNIT_PRICE
+        # ==============================================================
 
         print(
-            f"🔍 [진단 완료] 총 발전소: {len(plants_summary)}개소 + 다온에너지 | 전체"
-            f" 현재 발전량: {total_current_power:.2f}kW"
+            f"🔍 [진단 완료] 총 발전소: {len(plants_summary)}개소 | 전체 현재 발전량:"
+            f" {total_current_power:.2f}kW"
         )
 
-        # 3. 알림 메시지 구성 (1~7번 발전소 + 8번 다온에너지)
+        # 3. 알림 메시지 구성 (출력 순서 정돈)
         plant_list_text = ""
         for idx, p in enumerate(plants_summary, 1):
             plant_list_text += (
@@ -299,11 +294,20 @@ def monitor_solar_status(user_id, user_pw):
                 f"    • 예상매출: `{p['revenue']:,.0f} 원`\n\n"
             )
 
-        # 8번 다온에너지 추가
-        plant_list_text += (
-            "8. *다온에너지 (석계2 + 매곡4)*\n"
+        # 사업자별 요약 텍스트 (한빛산업 ➔ 한영앤코 ➔ 다온에너지 순)
+        owner_summary_text = (
+            "🏢 *[사업자별 현황 요약]*\n\n"
+            "1. *한빛산업*\n"
+            f"    • 용량: `{hanbit_capacity:,.2f} kW`\n"
+            f"    • 합계발전량: `{hanbit_generation:,.2f} kWh`\n"
+            f"    • 예상매출: `{hanbit_revenue:,.0f} 원`\n\n"
+            "2. *한영앤코*\n"
+            f"    • 용량: `{hanyoung_capacity:,.2f} kW`\n"
+            f"    • 합계발전량: `{hanyoung_generation:,.2f} kWh`\n"
+            f"    • 예상매출: `{hanyoung_revenue:,.0f} 원`\n\n"
+            "3. *다온에너지*\n"
             f"    • 용량: `{daon_total_capa:,.2f} kW`\n"
-            f"    • 합계발전량: `{daon_estimated_generation:,.2f} kWh`\n"
+            f"    • 합계발전량: `{daon_generation:,.2f} kWh`\n"
             f"    • 예상매출: `{daon_revenue:,.0f} 원`\n\n"
         )
 
@@ -316,8 +320,9 @@ def monitor_solar_status(user_id, user_pw):
                 "⚡ *[발전소별 실시간 현황]*\n"
                 f"{plant_list_text}"
                 f"• 단가: `{int(UNIT_PRICE)}원/kW` (보수적 기준)\n"
-                f"• 전체 합계 현재 발전량: `{total_current_power:,.2f} kW`\n"
-                f"• 전체 일일 예상 매출액: `{total_estimated_revenue + daon_revenue:,.0f} 원`\n"
+                f"• 합계 현재 발전량: `{total_current_power:,.2f} kW`\n"
+                f"• 전체 일일 예상 매출액: `{total_estimated_revenue:,.0f} 원`\n\n"
+                f"{owner_summary_text}"
                 f"• 확인 시간: {current_time_str}"
             )
             send_telegram_message(alert_msg)
@@ -332,8 +337,9 @@ def monitor_solar_status(user_id, user_pw):
                 "📊 *[발전소별 실시간 현황]*\n"
                 f"{plant_list_text}"
                 f"• 단가: `{int(UNIT_PRICE)}원/kW` (보수적 기준)\n"
-                f"• 전체 합계 현재 발전량: `{total_current_power:,.2f} kW`\n"
-                f"• 전체 일일 예상 매출액: `{total_estimated_revenue + daon_revenue:,.0f} 원`\n\n"
+                f"• 합계 현재 발전량: `{total_current_power:,.2f} kW`\n"
+                f"• 전체 일일 예상 매출액: `{total_estimated_revenue:,.0f} 원`\n\n"
+                f"{owner_summary_text}"
                 f"• 확인 시간: {current_time_str}"
             )
             send_telegram_message(heartbeat_msg)
