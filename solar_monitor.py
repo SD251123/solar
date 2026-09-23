@@ -140,6 +140,11 @@ def monitor_solar_status(user_id, user_pw):
         try:
             plant_name_elements = driver.find_elements(By.CSS_SELECTOR, "div.plant-name")
             capacity_elements = driver.find_elements(By.CSS_SELECTOR, "span.capa")
+            
+            # 페이지 전체에서 '금일 발전시간' 라벨 엘리먼트들을 순서대로 일괄 수집
+            time_label_elements = driver.find_elements(
+                By.XPATH, "//*[contains(text(), '금일 발전시간')]"
+            )
 
             print(f"📊 화면에서 감지된 발전소 수: {len(plant_name_elements)}개소")
 
@@ -199,53 +204,19 @@ def monitor_solar_status(user_id, user_pw):
 
                 total_current_power += p_power
 
-                # 3) 금일 발전시간 (h) 파싱 (깃허브 환경 최적화 강력 탐색 로직)
+                # 3) 금일 발전시간 (h) 파싱 (인덱스 기반 형제 span 직접 타겟팅)
                 p_hours = 0.0
-                if plant_card:
-                    try:
-                        # '금일 발전시간' 문구를 포함하는 모든 요소를 찾음
-                        time_labels = plant_card.find_elements(
-                            By.XPATH, ".//*[contains(text(), '금일 발전시간')]"
+                try:
+                    if i < len(time_label_elements):
+                        # '금일 발전시간' <div> 바로 다음 형제인 <span> 값 가져오기
+                        time_val_elem = time_label_elements[i].find_element(
+                            By.XPATH, "./following-sibling::span[1]"
                         )
-                        for tlbl in time_labels:
-                            try:
-                                # 부모 또는 조상 컨테이너로 접근하여 내부의 모든 span 확인
-                                container = tlbl.find_element(By.XPATH, "./parent::*")
-                                spans = container.find_elements(By.TAG_NAME, "span")
-                                if not spans:
-                                    container = tlbl.find_element(By.XPATH, "./ancestor::div[2]")
-                                    spans = container.find_elements(By.TAG_NAME, "span")
-
-                                for sp in spans:
-                                    sp_text = sp.text.replace(",", "").replace("h", "").strip()
-                                    if sp_text and "금일" not in sp_text and "발전시간" not in sp_text:
-                                        try:
-                                            val_float = float(sp_text)
-                                            # 발전시간은 하루 최대 24시간을 넘지 않으므로 0~24 범위 검증
-                                            if 0.0 <= val_float <= 24.0:
-                                                p_hours = val_float
-                                                break
-                                        except ValueError:
-                                            continue
-                                if p_hours > 0.0:
-                                    break
-                            except Exception:
-                                continue
-
-                        # 위 방법으로 못 찾았을 경우 카드 내 전체 span에서 유효한 시간 형태(0~24 사이 실수) 탐색
-                        if p_hours == 0.0:
-                            all_spans = plant_card.find_elements(By.TAG_NAME, "span")
-                            for sp in all_spans:
-                                sp_text = sp.text.replace(",", "").replace("h", "").strip()
-                                try:
-                                    val_float = float(sp_text)
-                                    if 0.0 <= val_float <= 24.0 and val_float != p_capacity and val_float != p_power:
-                                        p_hours = val_float
-                                        break
-                                except ValueError:
-                                    continue
-                    except Exception:
-                        p_hours = 0.0
+                        raw_hours = time_val_elem.text.replace(",", "").replace("h", "").strip()
+                        p_hours = float(raw_hours)
+                except Exception as ex:
+                    print(f"⚠️ [{p_name}] 발전시간 파싱 중 예외: {ex}")
+                    p_hours = 0.0
 
                 # 4) 예상 금일 발전량 및 매출 계산
                 p_generation = p_capacity * p_hours
