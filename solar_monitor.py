@@ -43,7 +43,7 @@ def send_telegram_message(message):
 
 
 def monitor_solar_status(user_id, user_pw):
-    print("🚀 깃허브 서버 환경(헤드리스)에서 7개 발전소 통합 순찰 모니터링 중...")
+    print("🚀 깃허브 서버 환경(헤드리스)에서 발전소 통합 순찰 모니터링 중...")
 
     # 한국 시간(KST, UTC+9) 계산
     kst = timezone(timedelta(hours=9))
@@ -131,43 +131,30 @@ def monitor_solar_status(user_id, user_pw):
         except Exception:
             pass
 
-        # ==================== [7개 발전소 데이터 자동 크롤링] ====================
+        # ==================== [발전소 데이터 자동 크롤링] ====================
         plants_summary = []
         total_current_power = 0.0
         total_estimated_revenue = 0.0
 
         try:
             plant_name_elements = driver.find_elements(By.CSS_SELECTOR, "div.plant-name")
-            power_elements = driver.find_elements(By.CSS_SELECTOR, ".now-power")
             capacity_elements = driver.find_elements(By.CSS_SELECTOR, "span.capa")
-            label_titles = driver.find_elements(
-                By.CSS_SELECTOR, "div.MediumGridBox__list-label-title___5YFwu"
-            )
 
             print(f"📊 화면에서 감지된 발전소 수: {len(plant_name_elements)}개소")
 
             for i in range(len(plant_name_elements)):
                 p_name = plant_name_elements[i].text.strip()
 
-                # 1) 현재 발전량 (kW) 파싱
-                p_power = 0.0
-                if i < len(power_elements):
-                    try:
-                        raw_text = (
-                            power_elements[i]
-                            .text.lower()
-                            .replace("kw", "")
-                            .replace("kwh", "")
-                            .replace(",", "")
-                            .strip()
-                        )
-                        p_power = float(raw_text)
-                    except Exception:
-                        p_power = 0.0
+                # 개별 발전소 카드 컨테이너 안전하게 특정
+                plant_card = None
+                try:
+                    plant_card = plant_name_elements[i].find_element(
+                        By.XPATH, "./ancestor::div[contains(@class, 'plant') or contains(@class, 'box') or contains(@class, 'card') or parent::div]"
+                    )
+                except Exception:
+                    plant_card = driver
 
-                total_current_power += p_power
-
-                # 2) 시설 용량 (kW) 파싱
+                # 1) 시설 용량 (kW) 파싱
                 p_capacity = 0.0
                 if i < len(capacity_elements):
                     try:
@@ -176,29 +163,63 @@ def monitor_solar_status(user_id, user_pw):
                     except Exception:
                         p_capacity = 0.0
 
-                # 3) 금일 발전시간 (h) 파싱 (안전성 강화)
+                # 2) 현재 발전량 (kW) 실시간 개별 파싱
+                p_power = 0.0
+                try:
+                    power_labels = plant_card.find_elements(
+                        By.XPATH, ".//*[contains(text(), '현재발전량')]"
+                    )
+                    for plbl in power_labels:
+                        try:
+                            val_elem = plbl.find_element(
+                                By.XPATH, "./following::*[contains(@class, 'now-power')][1]"
+                            )
+                            raw_text = (
+                                val_elem.text.lower()
+                                .replace("kw", "")
+                                .replace("kwh", "")
+                                .replace(",", "")
+                                .strip()
+                            )
+                            p_power = float(raw_text)
+                            break
+                        except Exception:
+                            pass
+                except Exception:
+                    p_power = 0.0
+
+                total_current_power += p_power
+
+                # 3) 금일 발전시간 (h) 실시간 개별 파싱
                 p_hours = 0.0
                 try:
-                    matching_labels = [
-                        el for el in label_titles if "금일 발전시간" in el.text
-                    ]
-                    if i < len(matching_labels):
-                        parent_box = matching_labels[i].find_element(
-                            By.XPATH, "./ancestor::div[contains(@class, 'GridBox') or parent::div]"
-                        )
-                        spans = parent_box.find_elements(By.TAG_NAME, "span")
-                        for sp in spans:
-                            val_str = sp.text.replace(",", "").strip()
-                            try:
-                                # 숫자로 변환 가능하고 라벨 텍스트 자체가 아닌 경우 추출
-                                val_float = float(val_str)
-                                if "금일" not in val_str and val_float >= 0:
-                                    p_hours = val_float
-                                    break
-                            except ValueError:
-                                continue
+                    time_labels = plant_card.find_elements(
+                        By.XPATH, ".//*[contains(text(), '금일 발전시간')]"
+                    )
+                    for tlbl in time_labels:
+                        try:
+                            container = tlbl.find_element(By.XPATH, "./parent::div | ./parent::*")
+                            spans = container.find_elements(By.TAG_NAME, "span")
+                            if not spans:
+                                container = tlbl.find_element(By.XPATH, "./ancestor::div[2]")
+                                spans = container.find_elements(By.TAG_NAME, "span")
+
+                            for sp in spans:
+                                sp_text = sp.text.replace(",", "").strip()
+                                if sp_text and "금일" not in sp_text and "발전시간" not in sp_text:
+                                    try:
+                                        val_float = float(sp_text)
+                                        if 0.0 <= val_float <= 24.0:
+                                            p_hours = val_float
+                                            break
+                                    except ValueError:
+                                        continue
+                            if p_hours > 0.0:
+                                break
+                        except Exception:
+                            pass
                 except Exception:
-                    pass
+                    p_hours = 0.0
 
                 # 4) 예상 금일 발전량 및 매출 계산 (용량 × 발전시간 = 누적 발전량 kWh)
                 estimated_generation = p_capacity * p_hours
@@ -217,19 +238,74 @@ def monitor_solar_status(user_id, user_pw):
             print(f"⚠️ 다중 발전소 크롤링 중 예외 발생: {e}")
         # ======================================================================
 
+        # ==================== [8. 다온에너지 계산 로직 추가] ====================
+        # 석계2, 매곡4 발전소 데이터 추출 후 합산
+        daon_capacity = 0.0
+        daon_power = 0.0
+        daon_revenue = 0.0
+
+        for p in plants_summary:
+            # 석계2 또는 매곡4 포함 여부 확인 (이름 매칭)
+            if "석계1,2" in p["name"] or "매곡1,2,3,4" in p["name"]:
+                # 석계1,2 전체 용량 중 석계2 비율 대략 반영 또는 유저 요청 명시값 적용
+                # 사용자 요청: 석계2(89.66kW), 매곡4(174.15kW) 고정 용량 합산
+                pass
+
+        # 정확한 유저 지정 기준용량 반영을 위해 이름 검색으로 개별 값 산출 대신 직접 매칭 조회
+        sge_2_capa = 89.66
+        mg_4_capa = 174.15
+        daon_total_capa = sge_2_capa + mg_4_capa  # 263.81 kW
+
+        # 크롤링된 발전소 중에서 해당 비율만큼의 실시간 발전량 및 매출 계산
+        # (석계1,2와 매곡 발전소들의 평균 발전시간 효율을 활용하여 합산)
+        sge_hours = 0.0
+        mg_hours = 0.0
+        for p in plants_summary:
+            if "석계1,2" in p["name"]:
+                sge_hours = p["hours"]
+            elif "매곡1,2,3,4" in p["name"]:
+                mg_hours = p["hours"]
+
+        # 각각의 당일 예상 발전량(용량 * 발전시간) 합산
+        daon_estimated_generation = (sge_2_capa * sge_hours) + (mg_4_capa * mg_hours)
+        daon_revenue = daon_estimated_generation * UNIT_PRICE
+
+        # 다온에너지 현재 발전량 합산 (비율 배분 혹은 대표값 대입 - 여기서는 단순 합산 추정)
+        sge_power = 0.0
+        mg_power = 0.0
+        for p in plants_summary:
+            if "석계1,2" in p["name"]:
+                # 석계1,2 전체 현재 발전량에서 석계2 비중(89.66 / 161.92) 만큼 적용
+                sge_power = p["power"] * (89.66 / max(p["capacity"], 1))
+            elif "매곡1,2,3,4" in p["name"]:
+                # 매곡전체 현재 발전량에서 매곡4 비중(174.15 / 351.98) 만큼 적용
+                mg_power = p["power"] * (174.15 / max(p["capacity"], 1))
+        daon_power = sge_power + mg_power
+        # ======================================================================
+
         print(
-            f"🔍 [진단 완료] 총 발전소: {len(plants_summary)}개소 | 전체 현재 발전량:"
-            f" {total_current_power:.2f}kW"
+            f"🔍 [진단 완료] 총 발전소: {len(plants_summary)}개소 + 다온에너지 | 전체"
+            f" 현재 발전량: {total_current_power:.2f}kW"
         )
 
-        # 3. 알림 메시지 구성 (7개 발전소 상세 현황 목록화)
+        # 3. 알림 메시지 구성 (1~7번 발전소 + 8번 다온에너지)
         plant_list_text = ""
         for idx, p in enumerate(plants_summary, 1):
             plant_list_text += (
                 f"{idx}. *{p['name']}*\n"
-                f"    • 용량: `{p['capacity']:,.2f} kW` | 현재: `{p['power']:,.2f} kW`\n"
-                f"    • 발전시간: `{p['hours']:,.2f} h` (예상매출: `{p['revenue']:,.0f} 원`)\n\n"
+                f"    • 용량: `{p['capacity']:,.2f} kW`\n"
+                f"    • 현재: `{p['power']:,.2f} kW`\n"
+                f"    • 발전시간: `{p['hours']:,.2f} h`\n"
+                f"    • 예상매출: `{p['revenue']:,.0f} 원`\n\n"
             )
+
+        # 8번 다온에너지 추가
+        plant_list_text += (
+            "8. *다온에너지 (석계2 + 매곡4)*\n"
+            f"    • 용량: `{daon_total_capa:,.2f} kW`\n"
+            f"    • 합계발전량: `{daon_estimated_generation:,.2f} kWh`\n"
+            f"    • 예상매출: `{daon_revenue:,.0f} 원`\n\n"
+        )
 
         # 3-1. 이상이 감지된 경우 즉시 긴급 경고 발송
         if total_issues > 0:
@@ -239,8 +315,9 @@ def monitor_solar_status(user_id, user_pw):
                 "• 이상이 생긴 발전소를 즉시 확인해 주세요.\n\n"
                 "⚡ *[발전소별 실시간 현황]*\n"
                 f"{plant_list_text}"
+                f"• 단가: `{int(UNIT_PRICE)}원/kW` (보수적 기준)\n"
                 f"• 전체 합계 현재 발전량: `{total_current_power:,.2f} kW`\n"
-                f"• 전체 예상 누적 매출: `{total_estimated_revenue:,.0f} 원`\n"
+                f"• 전체 일일 예상 매출액: `{total_estimated_revenue + daon_revenue:,.0f} 원`\n"
                 f"• 확인 시간: {current_time_str}"
             )
             send_telegram_message(alert_msg)
@@ -249,18 +326,19 @@ def monitor_solar_status(user_id, user_pw):
         # 3-2. 정기 리포트 시간(12시, 15시, 18시) 정각 30분 미만 실행 시 발송
         if current_hour in [12, 15, 18] and current_minute < 30:
             heartbeat_msg = (
-                "🟢 *[태양광 봇 정기 가동 리포트 (전체 7개소)]*\n\n"
+                "🟢 *[태양광 봇 정기 가동 리포트]*\n\n"
                 "• 상태: 정상 가동 중 🛡️\n"
                 "• 현재 시간대 순찰 점검이 완료되었습니다.\n\n"
                 "📊 *[발전소별 실시간 현황]*\n"
                 f"{plant_list_text}"
+                f"• 단가: `{int(UNIT_PRICE)}원/kW` (보수적 기준)\n"
                 f"• 전체 합계 현재 발전량: `{total_current_power:,.2f} kW`\n"
-                f"• 전체 예상 누적 매출: `{total_estimated_revenue:,.0f} 원`\n\n"
+                f"• 전체 일일 예상 매출액: `{total_estimated_revenue + daon_revenue:,.0f} 원`\n\n"
                 f"• 확인 시간: {current_time_str}"
             )
             send_telegram_message(heartbeat_msg)
             print(
-                f"🟢 정기 리포트 시간대({current_hour}시 정각 턴) 도래: 7개소 통합 리포트를"
+                f"🟢 정기 리포트 시간대({current_hour}시 정각 턴) 도래: 통합 리포트를"
                 " 전송했습니다."
             )
         else:
