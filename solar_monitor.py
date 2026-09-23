@@ -146,14 +146,17 @@ def monitor_solar_status(user_id, user_pw):
             for i in range(len(plant_name_elements)):
                 p_name = plant_name_elements[i].text.strip()
 
-                # 개별 발전소 카드 컨테이너 안전하게 특정
+                # 개별 발전소 카드 영역 특정 (상위 부모 컨테이너)
                 plant_card = None
                 try:
                     plant_card = plant_name_elements[i].find_element(
-                        By.XPATH, "./ancestor::div[contains(@class, 'plant') or contains(@class, 'box') or contains(@class, 'card') or parent::div]"
+                        By.XPATH, "./ancestor::*[contains(@class, 'plant') or contains(@class, 'box') or contains(@class, 'card')][1]"
                     )
                 except Exception:
-                    plant_card = driver
+                    try:
+                        plant_card = plant_name_elements[i].find_element(By.XPATH, "./parent::*")
+                    except Exception:
+                        plant_card = driver
 
                 # 1) 시설 용량 (kW) 파싱
                 p_capacity = 0.0
@@ -164,65 +167,72 @@ def monitor_solar_status(user_id, user_pw):
                     except Exception:
                         p_capacity = 0.0
 
-                # 2) 현재 발전량 (kW) 실시간 개별 파싱
+                # 2) 현재 발전량 (kW) 파싱 (알려주신 정확한 클래스 활용)
                 p_power = 0.0
-                try:
-                    power_labels = plant_card.find_elements(
-                        By.XPATH, ".//*[contains(text(), '현재발전량')]"
-                    )
-                    for plbl in power_labels:
+                if plant_card:
+                    try:
+                        power_elem = plant_card.find_element(
+                            By.CSS_SELECTOR, "div.now-power, div.MediumGridBox__list-label-val___3n6GW.now-power"
+                        )
+                        raw_power = (
+                            power_elem.text.lower()
+                            .replace("kw", "")
+                            .replace("kwh", "")
+                            .replace(",", "")
+                            .strip()
+                        )
+                        p_power = float(raw_power)
+                    except Exception:
+                        # 카사 내부에서 못 찾을 경우 전체 페이지 순서대로 매칭 시도
                         try:
-                            val_elem = plbl.find_element(
-                                By.XPATH, "./following::*[contains(@class, 'now-power')][1]"
-                            )
-                            raw_text = (
-                                val_elem.text.lower()
-                                .replace("kw", "")
-                                .replace("kwh", "")
-                                .replace(",", "")
-                                .strip()
-                            )
-                            p_power = float(raw_text)
-                            break
+                            all_powers = driver.find_elements(By.CSS_SELECTOR, "div.now-power")
+                            if i < len(all_powers):
+                                raw_power = (
+                                    all_powers[i].text.lower()
+                                    .replace("kw", "")
+                                    .replace("kwh", "")
+                                    .replace(",", "")
+                                    .strip()
+                                )
+                                p_power = float(raw_power)
                         except Exception:
-                            pass
-                except Exception:
-                    p_power = 0.0
+                            p_power = 0.0
 
                 total_current_power += p_power
 
-                # 3) 금일 발전시간 (h) 실시간 개별 파싱
+                # 3) 금일 발전시간 (h) 파싱
                 p_hours = 0.0
-                try:
-                    time_labels = plant_card.find_elements(
-                        By.XPATH, ".//*[contains(text(), '금일 발전시간')]"
-                    )
-                    for tlbl in time_labels:
-                        try:
-                            container = tlbl.find_element(By.XPATH, "./parent::div | ./parent::*")
-                            spans = container.find_elements(By.TAG_NAME, "span")
-                            if not spans:
-                                container = tlbl.find_element(By.XPATH, "./ancestor::div[2]")
+                if plant_card:
+                    try:
+                        time_labels = plant_card.find_elements(
+                            By.XPATH, ".//*[contains(text(), '금일 발전시간')]"
+                        )
+                        for tlbl in time_labels:
+                            try:
+                                container = tlbl.find_element(By.XPATH, "./parent::*")
                                 spans = container.find_elements(By.TAG_NAME, "span")
+                                if not spans:
+                                    container = tlbl.find_element(By.XPATH, "./ancestor::div[2]")
+                                    spans = container.find_elements(By.TAG_NAME, "span")
 
-                            for sp in spans:
-                                sp_text = sp.text.replace(",", "").strip()
-                                if sp_text and "금일" not in sp_text and "발전시간" not in sp_text:
-                                    try:
-                                        val_float = float(sp_text)
-                                        if 0.0 <= val_float <= 24.0:
-                                            p_hours = val_float
-                                            break
-                                    except ValueError:
-                                        continue
-                            if p_hours > 0.0:
-                                break
-                        except Exception:
-                            pass
-                except Exception:
-                    p_hours = 0.0
+                                for sp in spans:
+                                    sp_text = sp.text.replace(",", "").strip()
+                                    if sp_text and "금일" not in sp_text and "발전시간" not in sp_text:
+                                        try:
+                                            val_float = float(sp_text)
+                                            if 0.0 <= val_float <= 24.0:
+                                                p_hours = val_float
+                                                break
+                                        except ValueError:
+                                            continue
+                                if p_hours > 0.0:
+                                    break
+                            except Exception:
+                                pass
+                    except Exception:
+                        p_hours = 0.0
 
-                # 4) 예상 금일 발전량 및 매출 계산 (용량 × 발전시간 = 누적 발전량 kWh)
+                # 4) 예상 금일 발전량 및 매출 계산
                 p_generation = p_capacity * p_hours
                 p_revenue = p_generation * UNIT_PRICE
                 
@@ -245,13 +255,11 @@ def monitor_solar_status(user_id, user_pw):
         # ==================== [사업자별 집계 로직] ====================
         # 1. 한빛산업 (한빛에너지 태양광발전소)
         hanbit_capacity = 0.0
-        hanbit_generation = 0.0
         hanbit_revenue = 0.0
 
         for p in plants_summary:
             if "한빛" in p["name"]:
                 hanbit_capacity += p["capacity"]
-                hanbit_generation += p["generation"]
                 hanbit_revenue += p["revenue"]
 
         # 2. 다온에너지 (석계2 + 매곡4)
@@ -274,8 +282,7 @@ def monitor_solar_status(user_id, user_pw):
         total_1_to_7_capacity = sum(p["capacity"] for p in plants_summary)
         
         hanyoung_capacity = total_1_to_7_capacity - hanbit_capacity
-        hanyoung_generation = total_estimated_generation - hanbit_generation - daon_generation
-        hanyoung_revenue = hanyoung_generation * UNIT_PRICE
+        hanyoung_revenue = total_estimated_revenue - hanbit_revenue - daon_revenue
         # ==============================================================
 
         print(
@@ -294,20 +301,17 @@ def monitor_solar_status(user_id, user_pw):
                 f"    • 예상매출: `{p['revenue']:,.0f} 원`\n\n"
             )
 
-        # 사업자별 요약 텍스트 (한빛산업 ➔ 한영앤코 ➔ 다온에너지 순)
+        # 사업자별 요약 텍스트 (합계발전량 제외, 한빛 ➔ 한영앤코 ➔ 다온 순)
         owner_summary_text = (
             "🏢 *[사업자별 현황 요약]*\n\n"
             "1. *한빛산업*\n"
             f"    • 용량: `{hanbit_capacity:,.2f} kW`\n"
-            f"    • 합계발전량: `{hanbit_generation:,.2f} kWh`\n"
             f"    • 예상매출: `{hanbit_revenue:,.0f} 원`\n\n"
             "2. *한영앤코*\n"
             f"    • 용량: `{hanyoung_capacity:,.2f} kW`\n"
-            f"    • 합계발전량: `{hanyoung_generation:,.2f} kWh`\n"
             f"    • 예상매출: `{hanyoung_revenue:,.0f} 원`\n\n"
             "3. *다온에너지*\n"
             f"    • 용량: `{daon_total_capa:,.2f} kW`\n"
-            f"    • 합계발전량: `{daon_generation:,.2f} kWh`\n"
             f"    • 예상매출: `{daon_revenue:,.0f} 원`\n\n"
         )
 
