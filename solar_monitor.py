@@ -59,8 +59,8 @@ def monitor_solar_status(user_id, user_pw):
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        " AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 
     driver = None
@@ -167,7 +167,7 @@ def monitor_solar_status(user_id, user_pw):
                     except Exception:
                         p_capacity = 0.0
 
-                # 2) 현재 발전량 (kW) 파싱 (알려주신 정확한 클래스 활용)
+                # 2) 현재 발전량 (kW) 파싱
                 p_power = 0.0
                 if plant_card:
                     try:
@@ -183,7 +183,6 @@ def monitor_solar_status(user_id, user_pw):
                         )
                         p_power = float(raw_power)
                     except Exception:
-                        # 카사 내부에서 못 찾을 경우 전체 페이지 순서대로 매칭 시도
                         try:
                             all_powers = driver.find_elements(By.CSS_SELECTOR, "div.now-power")
                             if i < len(all_powers):
@@ -200,7 +199,7 @@ def monitor_solar_status(user_id, user_pw):
 
                 total_current_power += p_power
 
-                # 3) 금일 발전시간 (h) 파싱
+                # 3) 금일 발전시간 (h) 파싱 (안전한 파싱 로직 적용)
                 p_hours = 0.0
                 if plant_card:
                     try:
@@ -262,7 +261,7 @@ def monitor_solar_status(user_id, user_pw):
                 hanbit_capacity += p["capacity"]
                 hanbit_revenue += p["revenue"]
 
-        # 2. 다온에너지 (석계2 + 매곡4)
+        # 2. 다온에너지 (석계2 + 매곡4 용량 및 개별 발전시간 반영)
         sge_2_capa = 89.66
         mg_4_capa = 174.15
         daon_total_capa = sge_2_capa + mg_4_capa  # 263.81 kW
@@ -278,7 +277,7 @@ def monitor_solar_status(user_id, user_pw):
         daon_generation = (sge_2_capa * sge_hours) + (mg_4_capa * mg_hours)
         daon_revenue = daon_generation * UNIT_PRICE
 
-        # 3. 한영앤코 (나머지 모두 = 전체 1~7번 총합에서 한빛산업과 다온에너지 제외)
+        # 3. 한영앤코 (나머지 모두)
         total_1_to_7_capacity = sum(p["capacity"] for p in plants_summary)
         
         hanyoung_capacity = total_1_to_7_capacity - hanbit_capacity
@@ -290,7 +289,7 @@ def monitor_solar_status(user_id, user_pw):
             f" {total_current_power:.2f}kW"
         )
 
-        # 3. 알림 메시지 구성 (출력 순서 정돈)
+        # 3. 알림 메시지 구성
         plant_list_text = ""
         for idx, p in enumerate(plants_summary, 1):
             plant_list_text += (
@@ -301,7 +300,6 @@ def monitor_solar_status(user_id, user_pw):
                 f"    • 예상매출: `{p['revenue']:,.0f} 원`\n\n"
             )
 
-        # 사업자별 요약 텍스트 (합계발전량 제외, 한빛 ➔ 한영앤코 ➔ 다온 순)
         owner_summary_text = (
             "🏢 *[사업자별 현황 요약]*\n\n"
             "1. *한빛산업*\n"
@@ -348,14 +346,10 @@ def monitor_solar_status(user_id, user_pw):
             )
             send_telegram_message(heartbeat_msg)
             print(
-                f"🟢 정기 리포트 시간대({current_hour}시 정각 턴) 도래: 통합 리포트를"
-                " 전송했습니다."
+                f"🟢 정기 리포트 시간대({current_hour}시 정각 턴) 도래: 통합 리포트를 전송했습니다."
             )
         else:
-            print(
-                "🟢 정기 리포트 조건에 해당하지 않음 (30분 단위 순찰 또는 시간대"
-                " 불일치)."
-            )
+            print("🟢 정기 리포트 조건에 해당하지 않음.")
 
         if total_issues == 0 and not (
             current_hour in [12, 15, 18] and current_minute < 30
@@ -379,8 +373,7 @@ def monitor_solar_status(user_id, user_pw):
 if __name__ == "__main__":
     if not SOLAR_ID or not SOLAR_PW or not TELEGRAM_TOKEN or not TELEGRAM_CHAT_IDS:
         print(
-            "❌ 오류: 깃허브 시크릿 환경변수가 설정되지 않았습니다. (SOLAR_ID,"
-            " SOLAR_PW, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID 확인 필요)"
+            "❌ 오류: 깃허브 시크릿 환경변수가 설정되지 않았습니다. (SOLAR_ID, SOLAR_PW, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID 확인 필요)"
         )
     else:
         monitor_solar_status(SOLAR_ID, SOLAR_PW)
