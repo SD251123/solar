@@ -199,37 +199,26 @@ def monitor_solar_status(user_id, user_pw):
 
                 total_current_power += p_power
 
-                # 3) 금일 발전시간 (h) 파싱 (안전한 파싱 로직 적용)
+                # 3) 금일 발전시간 (h) 파싱 (개선된 형제/인접 태그 탐색 로직)
                 p_hours = 0.0
                 if plant_card:
                     try:
-                        time_labels = plant_card.find_elements(
-                            By.XPATH, ".//*[contains(text(), '금일 발전시간')]"
+                        # '금일 발전시간' 텍스트를 가진 div 바로 뒤나 인접한 span 값을 정확히 타겟팅
+                        time_elem = plant_card.find_element(
+                            By.XPATH, ".//*[contains(text(), '금일 발전시간')]/following-sibling::span[1]"
                         )
-                        for tlbl in time_labels:
-                            try:
-                                container = tlbl.find_element(By.XPATH, "./parent::*")
-                                spans = container.find_elements(By.TAG_NAME, "span")
-                                if not spans:
-                                    container = tlbl.find_element(By.XPATH, "./ancestor::div[2]")
-                                    spans = container.find_elements(By.TAG_NAME, "span")
-
-                                for sp in spans:
-                                    sp_text = sp.text.replace(",", "").strip()
-                                    if sp_text and "금일" not in sp_text and "발전시간" not in sp_text:
-                                        try:
-                                            val_float = float(sp_text)
-                                            if 0.0 <= val_float <= 24.0:
-                                                p_hours = val_float
-                                                break
-                                        except ValueError:
-                                            continue
-                                if p_hours > 0.0:
-                                    break
-                            except Exception:
-                                pass
+                        raw_hours = time_elem.text.replace(",", "").replace("h", "").strip()
+                        p_hours = float(raw_hours)
                     except Exception:
-                        p_hours = 0.0
+                        try:
+                            # 만약 구조상 상위 공용 부모 안에 있다면 우회 탐색
+                            fallback_elem = driver.find_element(
+                                By.XPATH, f"(//*[contains(text(), '금일 발전시간')]/following-sibling::span[1])[{i+1}]"
+                            )
+                            raw_hours = fallback_elem.text.replace(",", "").replace("h", "").strip()
+                            p_hours = float(raw_hours)
+                        except Exception:
+                            p_hours = 0.0
 
                 # 4) 예상 금일 발전량 및 매출 계산
                 p_generation = p_capacity * p_hours
