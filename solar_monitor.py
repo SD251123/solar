@@ -93,9 +93,8 @@ def monitor_solar_status(user_id, user_pw):
             By.CSS_SELECTOR, "button[type='submit'], .login-btn, button"
         ).click()
 
-        # 깃허브 서버의 느린 비동기 렌더링을 고려하여 대기 시간을 9초로 넉넉하게 상향
-        print("⏳ 대시보드 데이터 로딩 대기 중 (헤드리스 최적화)...")
-        for _ in tqdm(range(9), desc="데이터 렌더링 대기 중"):
+        print("⏳ 대시보드 데이터 로딩 대기 중...")
+        for _ in tqdm(range(8), desc="데이터 렌더링 대기 중"):
             time.sleep(1)
 
         total_issues = 0
@@ -141,7 +140,7 @@ def monitor_solar_status(user_id, user_pw):
         try:
             plant_name_elements = driver.find_elements(By.CSS_SELECTOR, "div.plant-name")
             capacity_elements = driver.find_elements(By.CSS_SELECTOR, "span.capa")
-            
+
             print(f"📊 화면에서 감지된 발전소 수: {len(plant_name_elements)}개소")
 
             for i in range(len(plant_name_elements)):
@@ -168,49 +167,53 @@ def monitor_solar_status(user_id, user_pw):
                     except Exception:
                         p_capacity = 0.0
 
-                # 2) 현재 발전량 (kW) 파싱 (값이 뜰 때까지 최대 3번 재시도)
+                # 2) 현재 발전량 (kW) 파싱
                 p_power = 0.0
-                for _ in range(3):
+                if plant_card:
                     try:
-                        if plant_card:
-                            power_elem = plant_card.find_element(
-                                By.CSS_SELECTOR, "div.now-power, div.MediumGridBox__list-label-val___3n6GW.now-power"
-                            )
-                            raw_power = (
-                                power_elem.text.lower()
-                                .replace("kw", "")
-                                .replace("kwh", "")
-                                .replace(",", "")
-                                .strip()
-                            )
-                            if raw_power:
-                                p_power = float(raw_power)
-                                if p_power > 0.0:
-                                    break
+                        power_elem = plant_card.find_element(
+                            By.CSS_SELECTOR, "div.now-power, div.MediumGridBox__list-label-val___3n6GW.now-power"
+                        )
+                        raw_power = (
+                            power_elem.text.lower()
+                            .replace("kw", "")
+                            .replace("kwh", "")
+                            .replace(",", "")
+                            .strip()
+                        )
+                        p_power = float(raw_power)
                     except Exception:
-                        pass
-                    time.sleep(0.5)
+                        try:
+                            all_powers = driver.find_elements(By.CSS_SELECTOR, "div.now-power")
+                            if i < len(all_powers):
+                                raw_power = (
+                                    all_powers[i].text.lower()
+                                    .replace("kw", "")
+                                    .replace("kwh", "")
+                                    .replace(",", "")
+                                    .strip()
+                                )
+                                p_power = float(raw_power)
+                        except Exception:
+                            p_power = 0.0
 
                 total_current_power += p_power
 
-                # 3) 금일 발전시간 (h) 파싱 (비동기 렌더링 지연 대응: 값이 채워질 때까지 최대 3번 재시도)
+                # 3) 금일 발전시간 (h) 파싱 (사용자가 제공한 인덱스 기반 고유 XPath 직접 활용)
                 p_hours = 0.0
+                card_index = i + 1  # 1부터 시작하는 발전소 카드 순번
+                
+                # 값이 완전히 렌더링될 때까지 최대 3번 재시도
                 for _ in range(3):
                     try:
-                        # 매번 최신 라벨 엘리먼트를 가져와서 형제 span 탐색
-                        time_label_elements = driver.find_elements(
-                            By.XPATH, "//*[contains(text(), '금일 발전시간')]"
-                        )
-                        if i < len(time_label_elements):
-                            time_val_elem = time_label_elements[i].find_element(
-                                By.XPATH, "./following-sibling::span[1]"
-                            )
-                            raw_hours = time_val_elem.text.replace(",", "").replace("h", "").strip()
-                            if raw_hours:
-                                val_f = float(raw_hours)
-                                if val_f > 0.0:
-                                    p_hours = val_f
-                                    break
+                        exact_xpath = f'//*[@id="root"]/div/div/div/div/div[2]/div/div[{card_index}]/div[2]/div[1]/div[2]/span[1]'
+                        time_val_elem = driver.find_element(By.XPATH, exact_xpath)
+                        raw_hours = time_val_elem.text.replace(",", "").replace("h", "").strip()
+                        if raw_hours:
+                            val_f = float(raw_hours)
+                            if val_f >= 0.0:
+                                p_hours = val_f
+                                break
                     except Exception:
                         pass
                     time.sleep(0.5)
